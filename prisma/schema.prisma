@@ -1,0 +1,292 @@
+// ── Prisma schema ─────────────────────────────────────────────
+// Docs: https://pris.ly/d/prisma-schema
+// Note: In Prisma 7, the datasource URL lives in prisma.config.ts
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ── Enums ─────────────────────────────────────────────────────
+
+enum Plan {
+  STARTER
+  AGENCY
+  ENTERPRISE
+}
+
+enum ScanStatus {
+  PENDING
+  RUNNING
+  COMPLETE
+  FAILED
+}
+
+enum AIEngine {
+  CHATGPT
+  PERPLEXITY
+  GEMINI
+  CLAUDE
+  GOOGLE_AIO
+  COPILOT
+  GROK
+}
+
+enum RecommendationType {
+  SCHEMA
+  CONTENT
+  CITATION
+  TECHNICAL
+  GEO_FACTOR
+}
+
+enum Priority {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum ScanFrequency {
+  WEEKLY
+  DAILY
+  ON_DEMAND
+}
+
+enum AlertType {
+  SCORE_DROP
+  COMPETITOR_SURGE
+  ENGINE_CHANGE
+  WEEKLY_DIGEST
+}
+
+// ── NextAuth required tables ───────────────────────────────────
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ── Core domain models ─────────────────────────────────────────
+
+model User {
+  id                    String    @id @default(cuid())
+  email                 String    @unique
+  emailVerified         DateTime?
+  name                  String?
+  image                 String?
+  passwordHash          String?
+  plan                  Plan      @default(STARTER)
+  stripeCustomerId      String?   @unique
+  stripeSubscriptionId  String?
+  apiKey                String?   @unique
+  apiKeyCreatedAt       DateTime?
+  whitelabelLogoUrl     String?
+  whitelabelAccentColor String?
+  onboardingComplete    Boolean   @default(false)
+  slackWebhookUrl       String?   @db.Text
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  accounts    Account[]
+  sessions    Session[]
+  brands      Brand[]
+  clientLinks ClientLink[]
+  alerts      Alert[]
+}
+
+model Brand {
+  id            String        @id @default(cuid())
+  userId        String
+  name          String
+  domain        String
+  category      String
+  competitors   String[]
+  promptCount   Int           @default(50)
+  scanFrequency ScanFrequency @default(WEEKLY)
+  geoCountries  String[]      @default(["US"])
+  geoLanguages  String[]      @default(["en"])
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  scans            Scan[]
+  visibilityScores VisibilityScore[]
+  recommendations  Recommendation[]
+  clientLinks      ClientLink[]
+  geoAudits        GeoAudit[]
+
+  @@index([userId])
+}
+
+model Scan {
+  id        String     @id @default(cuid())
+  brandId   String
+  weekOf    DateTime
+  status    ScanStatus @default(PENDING)
+  errorMsg  String?
+  country   String     @default("US")
+  language  String     @default("en")
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  brand   Brand        @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  results ScanResult[]
+
+  @@unique([brandId, weekOf])
+  @@index([brandId, weekOf])
+}
+
+model ScanResult {
+  id                String   @id @default(cuid())
+  scanId            String
+  engine            AIEngine
+  prompt            String   @db.Text
+  response          String   @db.Text
+  brandMentioned    Boolean  @default(false)
+  citationPosition  Int?
+  citationSourceUrl String?
+  sentimentScore    Float?
+  country           String   @default("US")
+  language          String   @default("en")
+  createdAt         DateTime @default(now())
+
+  scan Scan @relation(fields: [scanId], references: [id], onDelete: Cascade)
+
+  @@index([scanId])
+}
+
+model VisibilityScore {
+  id              String   @id @default(cuid())
+  brandId         String
+  weekOf          DateTime
+  overallScore    Float
+  chatgptScore    Float
+  perplexityScore Float
+  geminiScore     Float
+  claudeScore     Float
+  googleAioScore  Float    @default(0)
+  copilotScore    Float    @default(0)
+  grokScore       Float    @default(0)
+  shareOfVoice    Float
+  totalPrompts    Int      @default(0)
+  totalMentions   Int      @default(0)
+  country         String   @default("US")
+  language        String   @default("en")
+  createdAt       DateTime @default(now())
+
+  brand Brand @relation(fields: [brandId], references: [id], onDelete: Cascade)
+
+  @@unique([brandId, weekOf])
+  @@index([brandId, weekOf])
+}
+
+model Recommendation {
+  id             String             @id @default(cuid())
+  brandId        String
+  weekOf         DateTime
+  type           RecommendationType
+  priority       Priority
+  title          String
+  description    String             @db.Text
+  expectedImpact String
+  resolved       Boolean            @default(false)
+  resolvedAt     DateTime?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  brand Brand @relation(fields: [brandId], references: [id], onDelete: Cascade)
+
+  @@index([brandId, weekOf])
+  @@index([brandId, resolved])
+}
+
+// ── GEO Audit Scorecard ────────────────────────────────────────
+
+model GeoAudit {
+  id           String          @id @default(cuid())
+  brandId      String?
+  userId       String?
+  url          String
+  overallScore Float
+  factors      Json
+  suggestions  Json
+  createdAt    DateTime        @default(now())
+
+  brand Brand? @relation(fields: [brandId], references: [id], onDelete: SetNull)
+
+  @@index([brandId])
+  @@index([userId])
+}
+
+// ── Smart Alerts ───────────────────────────────────────────────
+
+model Alert {
+  id        String    @id @default(cuid())
+  userId    String
+  type      AlertType
+  title     String
+  message   String    @db.Text
+  brandName String?
+  metadata  Json?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+  @@index([userId, createdAt])
+}
+
+// ── Agency white-label sub-accounts ────────────────────────────
+
+model ClientLink {
+  id          String   @id @default(cuid())
+  agencyId    String
+  brandId     String
+  clientEmail String
+  token       String   @unique @default(cuid())
+  createdAt   DateTime @default(now())
+
+  agency User  @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  brand  Brand @relation(fields: [brandId], references: [id], onDelete: Cascade)
+
+  @@index([token])
+  @@index([agencyId])
+}
